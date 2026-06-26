@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "realsense-vlm-object-locator"
+version = "0.1.0"
+description = "Locate a named RGB object in RealSense D435i camera coordinates using OpenRouter VLM bounding boxes and aligned depth."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.23",
+    "opencv-python>=4.8",
+    "pyrealsense2>=2.54",
+    "PyYAML>=6.0",
+    "python-dotenv>=1.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+grounded-sam = [
+    "accelerate>=0.26",
+    "Pillow>=10.0",
+    "torch>=2.1",
+    "transformers>=4.41",
+]
+
+[project.scripts]
+object-locator = "object_locator.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

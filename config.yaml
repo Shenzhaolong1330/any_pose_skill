@@ -1,0 +1,92 @@
+target:
+  name: "leftmost sample bottle"
+  description: "There are several sample bottles scattered on the tabletop. Each sample bottle has a black cap/head and a transparent body. Select the leftmost sample bottle in the image by the full bottle bounding box. Return a tight box around the whole selected bottle. For orientation, head_px is the center of the black cap/head and tail_px is the opposite transparent body end; the pointing direction is tail_px -> head_px."
+
+detector:
+  # auto: use local color detection for colored targets such as "red cube";
+  # otherwise use VLM. Use "vlm" for arbitrary objects, "color" to force HSV color detection.
+  mode: "grounded_sam"
+  color: "auto"
+  min_area_px: 150
+  max_area_ratio: 0.2
+  min_saturation: 60
+  min_value: 40
+  morph_kernel: 5
+  # For transparent sample bottles, do not use simple color validation.
+  validate_vlm_color: false
+  min_vlm_color_ratio: 0.02
+  fallback_to_color_on_vlm_mismatch: true
+
+grounded_sam:
+  # Grounding DINO finds all matching bottles; local code selects the leftmost box.
+  grounding_model: "IDEA-Research/grounding-dino-tiny"
+  text_prompt: "sample bottle"
+  selection: "leftmost"
+  box_threshold: 0.25
+  text_threshold: 0.25
+  device: "auto"
+
+  # SAM refines the selected DINO box into a mask. The mask principal axis plus
+  # the black cap region gives the bottle pointing direction tail -> head.
+  sam_model: "facebook/sam-vit-base"
+  use_sam: true
+  refine_bbox_with_mask: true
+  min_box_area_px: 100
+  max_box_area_ratio: 0.5
+  min_mask_area_px: 100
+  cap_dark_threshold: 80
+  cap_min_area_px: 20
+
+openrouter:
+  # Good default for quick bbox JSON on RGB frames. For higher quality, try:
+  # google/gemini-3.1-flash-image or anthropic/claude-sonnet-4.
+  model: "google/gemini-3.1-flash-image"
+  timeout_s: 60.0
+  temperature: 0.0
+  jpeg_quality: 90
+  max_tokens: 1024
+  use_json_schema: true
+  require_parameters: true
+  retry_without_json_schema: true
+
+realsense:
+  # Leave null when only one RealSense is connected. Set to a camera serial
+  # string when multiple cameras are connected, e.g. "123456789012".
+  serial_number: null
+  width: 1280
+  height: 720
+  fps: 30
+  warmup_frames: 30
+
+depth:
+  strategy: "median"      # median, foreground, or center
+  # Use "tail" to locate the transparent body end. Use "head" for the black cap,
+  # "bbox" for whole-object bbox center, or "auto" to prefer head when available.
+  position_anchor: "tail" # auto, bbox, head, or tail
+  anchor_radius_px: 12
+  inner_ratio: 0.7
+  min_depth_m: 0.05
+  max_depth_m: 6.0
+  min_samples: 50
+  # D435i depth can be sparse on tiny objects. If the tight bbox has only a few
+  # valid pixels, use them instead of failing, and optionally search nearby.
+  fallback_min_samples: 5
+  max_expand_ratio: 2.5
+  expand_steps: 3
+
+calibration:
+  # Set true after replacing calibration/extrinsics.yaml with real extrinsics.
+  # Output then includes position_base in the robot base frame.
+  enabled: false
+  # head: static head camera, using base_T_camera.
+  # wrist: wrist camera, using base_T_flange * flange_T_camera.
+  active_camera: "head"
+  file: "calibration/extrinsics.yaml"
+
+output:
+  json: true
+  debug_image: "runs/latest_panel.jpg"
+  debug_rgb_image: "runs/latest_rgb.jpg"
+  debug_depth_image: "runs/latest_depth.jpg"
+  vlm_response: "runs/latest_vlm_response.json"
+  save_depth: null

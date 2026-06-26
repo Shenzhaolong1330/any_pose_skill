@@ -1,0 +1,4 @@
+interface:
+  display_name: "RealSense Object Locator"
+  short_description: "Run and debug RGB-D object localization"
+  default_prompt: "Use $realsense-object-locator to configure, run, and debug this RealSense object localization project."
