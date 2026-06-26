@@ -1,0 +1,11 @@
+# Placeholder for the current robot flange pose in base frame.
+#
+# This file is only needed when:
+#   calibration.active_camera: "wrist"
+#
+# Update it from the robot controller before running object-locator, or replace
+# this file-based handoff with a live robot-state integration later.
+
+base_T_flange:
+  translation_m: [0.0, 0.0, 0.0]
+  rotation_quat_xyzw: [0.0, 0.0, 0.0, 1.0]

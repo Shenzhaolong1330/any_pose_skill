@@ -1,0 +1,37 @@
+# Reserved calibration file for transforming camera-frame positions to robot base.
+#
+# Convention:
+#   parent_T_child maps a point from child frame to parent frame:
+#     p_parent = R_parent_child * p_child + t_parent_child
+#
+# Replace all placeholder values with real calibration before enabling
+# `calibration.enabled: true` in config.yaml.
+
+version: 1
+active_camera: "head"
+
+frames:
+  base: "base"
+  flange: "flange"
+  camera: "realsense_color_optical_frame"
+
+cameras:
+  # Head/static camera mounted in the workspace.
+  # Fill this with the calibrated pose of the RealSense color optical frame
+  # relative to the robot base frame.
+  head:
+    camera_frame: "head_realsense_color_optical_frame"
+    base_T_camera:
+      translation_m: [0.0, 0.0, 0.0]
+      rotation_quat_xyzw: [0.0, 0.0, 0.0, 1.0]
+
+  # Wrist camera mounted on the robot flange.
+  # The static hand-eye calibration gives flange_T_camera.
+  # The current robot state must provide base_T_flange at runtime.
+  wrist:
+    camera_frame: "wrist_realsense_color_optical_frame"
+    flange_T_camera:
+      translation_m: [0.0, 0.0, 0.0]
+      rotation_quat_xyzw: [0.0, 0.0, 0.0, 1.0]
+    base_T_flange:
+      file: "base_T_flange.yaml"
