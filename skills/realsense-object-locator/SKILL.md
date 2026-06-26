@@ -16,7 +16,7 @@ If this skill is stored inside the repository at `skills/realsense-object-locato
 1. Inspect `config.yaml` before running or changing behavior.
 2. Use `object-locator --config config.yaml` for human-readable output.
 3. Use `object-locator --config config.yaml --json` for machine-readable output.
-4. Save final JSON with shell redirection, for example `object-locator --config config.yaml --json > runs/latest_result.json`.
+4. Use `output.result_json: "runs/results/{run_id}.json"` and `output.history_dir` for non-overwriting saved results; avoid redirecting repeated runs to `runs/latest_result.json`.
 5. Inspect `runs/latest_panel.jpg`, `runs/latest_rgb.jpg`, `runs/latest_depth.jpg`, and `runs/latest_vlm_response.json` when localization looks wrong.
 6. Run lightweight validation after code changes: `PYTHONPATH=src python3 -m unittest discover` and `python3 -m compileall src tests setup.py`.
 

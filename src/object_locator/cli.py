@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import os
 from pathlib import Path
+import shutil
 
 import cv2
 
@@ -39,6 +41,8 @@ def main() -> int:
         app_config = load_config(args.config)
         runtime = _merge_args_with_config(args, app_config)
         result = locate_once(runtime)
+        _maybe_archive_vlm_response(runtime, result)
+        _maybe_save_result_json(runtime, result)
     except (DepthEstimationError, OpenRouterError, RuntimeError, ValueError) as exc:
         print(f"ERROR: {exc}")
         return 1
@@ -56,14 +60,21 @@ def locate_once(runtime: dict) -> dict:
         height=runtime["height"],
         fps=runtime["fps"],
         serial_number=runtime["serial_number"],
+        reset_on_start=runtime["reset_on_start"],
+        reset_wait_s=runtime["reset_wait_s"],
     ) as camera:
-        frame = camera.capture(warmup_frames=runtime["warmup_frames"])
+        frame = camera.capture(
+            warmup_frames=runtime["warmup_frames"],
+            timeout_ms=runtime["frame_timeout_ms"],
+            retries=runtime["capture_retries"],
+        )
 
     detection = _detect_object(frame.color_bgr, runtime)
     if not detection.found:
         result = {
             "target": runtime["target"],
             "found": False,
+            "run_id": runtime["run_id"],
             "detection": detection.to_dict(),
             "message": "object was not found by the configured detector",
             "debug_outputs": _maybe_save_debug(runtime, frame.color_bgr, frame.depth_m, detection, None),
@@ -119,6 +130,7 @@ def locate_once(runtime: dict) -> dict:
     return {
         "target": runtime["target"],
         "found": True,
+        "run_id": runtime["run_id"],
         "detection": detection.to_dict(),
         "position": position.to_dict(),
         "position_anchor": position_anchor,
@@ -132,6 +144,8 @@ def locate_once(runtime: dict) -> dict:
             "width": runtime["width"],
             "height": runtime["height"],
             "fps": runtime["fps"],
+            "reset_on_start": runtime["reset_on_start"],
+            "reset_wait_s": runtime["reset_wait_s"],
         },
         "coordinate_frame": {
             "name": "RealSense color optical frame",
@@ -175,6 +189,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int)
     parser.add_argument("--fps", type=int)
     parser.add_argument("--warmup-frames", type=int)
+    parser.add_argument("--frame-timeout-ms", type=int)
+    parser.add_argument("--capture-retries", type=int)
+    parser.add_argument(
+        "--reset-realsense",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Hardware-reset the RealSense before opening streams.",
+    )
+    parser.add_argument("--reset-wait-s", type=float)
     parser.add_argument("--timeout", type=float)
     parser.add_argument("--temperature", type=float)
     parser.add_argument("--jpeg-quality", type=int)
@@ -207,6 +230,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output", help="Optional combined RGB/depth debug panel path.")
     parser.add_argument("--output-rgb", help="Optional RGB bbox debug image path.")
     parser.add_argument("--output-depth", help="Optional depth bbox debug image path.")
+    parser.add_argument(
+        "--result-json",
+        help="Optional final result JSON path. Supports {run_id}; use empty string to disable.",
+    )
+    parser.add_argument(
+        "--history-dir",
+        help=(
+            "Directory for timestamped per-run archives. "
+            "Use an empty string in config to disable."
+        ),
+    )
     parser.add_argument("--save-vlm-response", help="Optional raw VLM response JSON path.")
     parser.add_argument("--save-depth", help="Optional .npy path for aligned depth in meters.")
     parser.add_argument(
@@ -269,6 +303,14 @@ def _merge_args_with_config(args: argparse.Namespace, config) -> dict:
         "height": _coalesce(args.height, config.realsense.height),
         "fps": _coalesce(args.fps, config.realsense.fps),
         "warmup_frames": _coalesce(args.warmup_frames, config.realsense.warmup_frames),
+        "frame_timeout_ms": _coalesce(args.frame_timeout_ms, config.realsense.frame_timeout_ms),
+        "capture_retries": _coalesce(args.capture_retries, config.realsense.capture_retries),
+        "reset_on_start": (
+            config.realsense.reset_on_start
+            if args.reset_realsense is None
+            else args.reset_realsense
+        ),
+        "reset_wait_s": _coalesce(args.reset_wait_s, config.realsense.reset_wait_s),
         "timeout_s": _coalesce(args.timeout, config.openrouter.timeout_s),
         "temperature": _coalesce(args.temperature, config.openrouter.temperature),
         "jpeg_quality": _coalesce(args.jpeg_quality, config.openrouter.jpeg_quality),
@@ -297,6 +339,13 @@ def _merge_args_with_config(args: argparse.Namespace, config) -> dict:
         "calibration_enabled": config.calibration.enabled,
         "calibration_file": config.calibration.file,
         "calibration_active_camera": config.calibration.active_camera,
+        "result_json": (
+            args.result_json if args.result_json is not None else config.output.result_json
+        ),
+        "history_dir": (
+            args.history_dir if args.history_dir is not None else config.output.history_dir
+        ),
+        "run_id": _new_run_id(),
         "debug_image": args.output if args.output is not None else config.output.debug_image,
         "debug_rgb_image": (
             args.output_rgb if args.output_rgb is not None else config.output.debug_rgb_image
@@ -342,6 +391,13 @@ def _runtime_metadata(runtime: dict) -> dict:
         "debug_depth_image": runtime["debug_depth_image"],
         "vlm_response": runtime["vlm_response"],
         "save_depth": runtime["save_depth"],
+        "result_json": runtime["result_json"],
+        "history_dir": runtime["history_dir"],
+        "run_id": runtime["run_id"],
+        "frame_timeout_ms": runtime["frame_timeout_ms"],
+        "capture_retries": runtime["capture_retries"],
+        "reset_on_start": runtime["reset_on_start"],
+        "reset_wait_s": runtime["reset_wait_s"],
         "calibration_enabled": runtime["calibration_enabled"],
         "calibration_file": runtime["calibration_file"],
         "calibration_active_camera": runtime["calibration_active_camera"],
@@ -594,6 +650,10 @@ def _maybe_save_debug(
         rgb_debug = draw_detection(color_bgr, detection, position, orientation, title="RGB")
         cv2.imwrite(str(rgb_path), rgb_debug)
         outputs["rgb"] = str(rgb_path)
+        history_rgb_path = _history_path(runtime, "rgb.jpg")
+        if history_rgb_path is not None:
+            cv2.imwrite(str(history_rgb_path), rgb_debug)
+            outputs["rgb_history"] = str(history_rgb_path)
 
     if runtime["debug_depth_image"]:
         depth_path = Path(runtime["debug_depth_image"])
@@ -609,6 +669,10 @@ def _maybe_save_debug(
         )
         cv2.imwrite(str(depth_path), depth_debug)
         outputs["depth"] = str(depth_path)
+        history_depth_path = _history_path(runtime, "depth.jpg")
+        if history_depth_path is not None:
+            cv2.imwrite(str(history_depth_path), depth_debug)
+            outputs["depth_history"] = str(history_depth_path)
 
     if runtime["debug_image"]:
         panel_path = Path(runtime["debug_image"])
@@ -624,8 +688,78 @@ def _maybe_save_debug(
         )
         cv2.imwrite(str(panel_path), panel)
         outputs["panel"] = str(panel_path)
+        history_panel_path = _history_path(runtime, "panel.jpg")
+        if history_panel_path is not None:
+            cv2.imwrite(str(history_panel_path), panel)
+            outputs["panel_history"] = str(history_panel_path)
+
+    history_dir = _history_dir(runtime)
+    if history_dir is not None:
+        outputs["history_dir"] = str(history_dir)
 
     return outputs
+
+
+def _maybe_save_result_json(runtime: dict, result: dict) -> None:
+    outputs = result.setdefault("debug_outputs", {})
+    result_path = _output_path(runtime.get("result_json"), runtime)
+    history_path = _history_path(runtime, "result.json")
+
+    if result_path is not None:
+        outputs["result_json"] = str(result_path)
+    if history_path is not None:
+        outputs["result_json_history"] = str(history_path)
+
+    written: set[Path] = set()
+    for path in (result_path, history_path):
+        if path is None or path in written:
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as handle:
+            json.dump(result, handle, ensure_ascii=False, indent=2)
+        written.add(path)
+
+
+def _maybe_archive_vlm_response(runtime: dict, result: dict) -> None:
+    source_path = runtime.get("vlm_response")
+    if not source_path:
+        return
+    source = Path(source_path)
+    if not source.exists():
+        return
+    archive_path = _history_path(runtime, "detector_trace.json")
+    if archive_path is None:
+        return
+    shutil.copy2(source, archive_path)
+    result.setdefault("debug_outputs", {})["detector_trace_history"] = str(archive_path)
+
+
+def _history_path(runtime: dict, filename: str) -> Path | None:
+    history_dir = _history_dir(runtime)
+    if history_dir is None:
+        return None
+    history_dir.mkdir(parents=True, exist_ok=True)
+    return history_dir / filename
+
+
+def _output_path(path_template: str | None, runtime: dict) -> Path | None:
+    if not path_template:
+        return None
+    try:
+        return Path(str(path_template).format(run_id=runtime["run_id"]))
+    except KeyError as exc:
+        raise ValueError("output path templates support only {run_id}") from exc
+
+
+def _history_dir(runtime: dict) -> Path | None:
+    history_root = runtime.get("history_dir")
+    if not history_root:
+        return None
+    return Path(history_root) / str(runtime["run_id"])
+
+
+def _new_run_id() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
 
 def _load_dotenv() -> None:

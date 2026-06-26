@@ -68,6 +68,10 @@ class RealSenseConfig:
     height: int = 480
     fps: int = 30
     warmup_frames: int = 30
+    frame_timeout_ms: int = 15000
+    capture_retries: int = 3
+    reset_on_start: bool = False
+    reset_wait_s: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -94,6 +98,8 @@ class CalibrationConfig:
 @dataclass(frozen=True)
 class OutputConfig:
     json: bool = False
+    result_json: str | None = "runs/results/{run_id}.json"
+    history_dir: str | None = "runs/history"
     debug_image: str | None = "runs/latest_panel.jpg"
     debug_rgb_image: str | None = "runs/latest_rgb.jpg"
     debug_depth_image: str | None = "runs/latest_depth.jpg"
@@ -189,6 +195,10 @@ def config_from_dict(raw: dict[str, Any]) -> AppConfig:
             height=int(realsense.get("height", 480)),
             fps=int(realsense.get("fps", 30)),
             warmup_frames=int(realsense.get("warmup_frames", 30)),
+            frame_timeout_ms=int(realsense.get("frame_timeout_ms", 15000)),
+            capture_retries=int(realsense.get("capture_retries", 3)),
+            reset_on_start=bool(realsense.get("reset_on_start", False)),
+            reset_wait_s=float(realsense.get("reset_wait_s", 5.0)),
         ),
         depth=DepthConfig(
             strategy=str(depth.get("strategy", "median")),
@@ -209,6 +219,8 @@ def config_from_dict(raw: dict[str, Any]) -> AppConfig:
         ),
         output=OutputConfig(
             json=bool(output.get("json", False)),
+            result_json=_optional_str(output.get("result_json", "runs/results/{run_id}.json")),
+            history_dir=_optional_str(output.get("history_dir", "runs/history")),
             debug_image=_optional_str(output.get("debug_image", "runs/latest_panel.jpg")),
             debug_rgb_image=_optional_str(output.get("debug_rgb_image", "runs/latest_rgb.jpg")),
             debug_depth_image=_optional_str(

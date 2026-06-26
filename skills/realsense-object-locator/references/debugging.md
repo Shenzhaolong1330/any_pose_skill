@@ -91,6 +91,33 @@ object-locator --list-devices
 
 Then set `realsense.serial_number` to the matching device. Also check librealsense installation, udev rules, USB bandwidth, and whether another process is holding the camera.
 
+### Frame didn't arrive within ...
+
+This is a RealSense frame timeout, usually caused by USB bandwidth, another process using the camera, unsupported stream profile, or unstable startup. Normal `object-locator` exits call `pipeline.stop()`, but a killed process or stuck USB/firmware state can still leave the next run unable to receive frames. `1280x720@30` is the highest common D435i color/depth profile used by this project; if it times out, test `848x480@30`, connect directly to a USB3 port, close `realsense-viewer`, and increase:
+
+```yaml
+realsense:
+  width: 1280
+  height: 720
+  frame_timeout_ms: 20000
+  capture_retries: 5
+  warmup_frames: 30
+```
+
+For one run, try:
+
+```bash
+object-locator --config config.yaml --json --reset-realsense
+```
+
+Or set:
+
+```yaml
+realsense:
+  reset_on_start: true
+  reset_wait_s: 5.0
+```
+
 ### Python venv cannot be created
 
 On Ubuntu or Debian, install venv support:

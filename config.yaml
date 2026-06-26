@@ -52,11 +52,19 @@ openrouter:
 realsense:
   # Leave null when only one RealSense is connected. Set to a camera serial
   # string when multiple cameras are connected, e.g. "123456789012".
-  serial_number: null
+  serial_number: 344322074412
+  # Highest common color/depth profile used by this project on D435i.
+  # If frames time out, switch back to 848x480@30 to reduce USB bandwidth.
   width: 1280
   height: 720
   fps: 30
   warmup_frames: 30
+  frame_timeout_ms: 20000
+  capture_retries: 5
+  # Set true, or run with --reset-realsense, when the camera was left in a bad
+  # USB/firmware state after a killed process or another app held the stream.
+  reset_on_start: false
+  reset_wait_s: 5.0
 
 depth:
   strategy: "median"      # median, foreground, or center
@@ -85,6 +93,11 @@ calibration:
 
 output:
   json: true
+  # Final JSON result for each run. The {run_id} template prevents overwriting.
+  result_json: "runs/results/{run_id}.json"
+  # Every run is archived under runs/history/<run_id>/ so repeated z tests do
+  # not overwrite previous measurements. Set to null or "" to disable.
+  history_dir: "runs/history"
   debug_image: "runs/latest_panel.jpg"
   debug_rgb_image: "runs/latest_rgb.jpg"
   debug_depth_image: "runs/latest_depth.jpg"

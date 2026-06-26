@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -6,7 +7,12 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from object_locator.cli import _position_box_for_detection, _validate_or_replace_vlm_detection  # noqa: E402
+from object_locator.cli import (  # noqa: E402
+    _maybe_archive_vlm_response,
+    _maybe_save_result_json,
+    _position_box_for_detection,
+    _validate_or_replace_vlm_detection,
+)
 from object_locator.models import BoundingBox, DetectionResult, PixelPoint  # noqa: E402
 
 
@@ -93,6 +99,51 @@ class CliDetectorTests(unittest.TestCase):
 
         self.assertEqual(anchor, "bbox")
         self.assertEqual(box, detection.bbox)
+
+    def test_result_json_history_uses_run_id_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = {"history_dir": directory, "result_json": None, "run_id": "run-001"}
+            result = {"found": True, "debug_outputs": {}}
+
+            _maybe_save_result_json(runtime, result)
+
+            result_path = Path(directory) / "run-001" / "result.json"
+            self.assertTrue(result_path.exists())
+            self.assertEqual(result["debug_outputs"]["result_json_history"], str(result_path))
+
+    def test_result_json_template_uses_run_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = {
+                "history_dir": None,
+                "result_json": str(Path(directory) / "{run_id}.json"),
+                "run_id": "run-003",
+            }
+            result = {"found": True, "debug_outputs": {}}
+
+            _maybe_save_result_json(runtime, result)
+
+            result_path = Path(directory) / "run-003.json"
+            self.assertTrue(result_path.exists())
+            self.assertEqual(result["debug_outputs"]["result_json"], str(result_path))
+
+    def test_archives_detector_trace_when_present(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trace_path = Path(directory) / "latest_vlm_response.json"
+            trace_path.write_text('{"vlm_called": false}', encoding="utf-8")
+            runtime = {
+                "history_dir": str(Path(directory) / "history"),
+                "run_id": "run-002",
+                "vlm_response": str(trace_path),
+            }
+            result = {"found": True, "debug_outputs": {}}
+
+            _maybe_archive_vlm_response(runtime, result)
+
+            archive_path = Path(directory) / "history" / "run-002" / "detector_trace.json"
+            self.assertTrue(archive_path.exists())
+            self.assertEqual(
+                result["debug_outputs"]["detector_trace_history"], str(archive_path)
+            )
 
 
 if __name__ == "__main__":

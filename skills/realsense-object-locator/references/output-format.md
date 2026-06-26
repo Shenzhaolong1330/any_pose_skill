@@ -1,10 +1,12 @@
 # Output Format Reference
 
-Use `object-locator --config config.yaml --json` or `output.json: true` to print final JSON to stdout. Save it explicitly:
+Use `object-locator --config config.yaml --json` or `output.json: true` to print final JSON to stdout.
 
 ```bash
-object-locator --config config.yaml --json > runs/latest_result.json
+object-locator --config config.yaml --json
 ```
+
+The final JSON is also saved to `output.result_json`, normally `runs/results/{run_id}.json`, and to `runs/history/{run_id}/result.json` when history is enabled. Avoid shell redirection to `runs/latest_result.json` for repeated measurements because that fixed path will be overwritten by the shell.
 
 `runs/latest_vlm_response.json` is detector trace or raw VLM response, not the final localization result.
 
@@ -14,6 +16,7 @@ object-locator --config config.yaml --json > runs/latest_result.json
 {
   "target": "leftmost sample bottle",
   "found": true,
+  "run_id": "20260626_153012_123456",
   "detection": {},
   "position": {},
   "position_anchor": "head",
@@ -27,12 +30,32 @@ object-locator --config config.yaml --json > runs/latest_result.json
 ```
 
 - `found`: Whether the configured detector found the target.
+- `run_id`: Timestamp-like identifier used for `runs/history/<run_id>/`.
 - `detection`: 2D detection metadata.
 - `position`: 3D position estimate for the selected anchor point.
 - `position_anchor`: Which part was used for position, usually `head`, `tail`, or `bbox`.
 - `position_base`: Optional transformed position in robot base frame.
 - `orientation`: Optional direction estimate.
 - `debug_outputs`: Paths to generated debug images.
+
+When `output.result_json` or `output.history_dir` is enabled, `debug_outputs` includes paths such as `result_json`, `result_json_history`, `rgb_history`, `depth_history`, `panel_history`, and `detector_trace_history`.
+
+## RealSense
+
+```json
+{
+  "serial_number": "123456789012",
+  "width": 1280,
+  "height": 720,
+  "fps": 30,
+  "reset_on_start": false,
+  "reset_wait_s": 5.0
+}
+```
+
+- `width`, `height`, `fps`: Active stream profile requested from RealSense.
+- `reset_on_start`: Whether this run attempted a hardware reset before opening streams.
+- `reset_wait_s`: Wait time after hardware reset.
 
 ## Detection
 

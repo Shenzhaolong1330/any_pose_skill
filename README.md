@@ -1,15 +1,135 @@
-# RealSense + OpenRouter VLM 物体定位
+# RealSense RGB-D 物体/部位定位
 
 这个项目用 Intel RealSense D435i 的 RGB + 深度图，估计 RGB 画面中某个指定物体相对相机的位置。
 
-你的想法是可行的，推荐链路是：
+项目当前支持三类检测方式：
+
+- `grounded_sam`: Grounding DINO 按文本找目标，SAM 分割 mask，适合样本瓶、试管、小物体实例选择。
+- `color`: 本地 HSV 颜色检测，适合红/绿/蓝方块这类颜色明确的目标。
+- `vlm`: OpenRouter VLM 按自然语言返回 bbox/keypoint，适合复杂语义目标或临时指定部位。
+
+## 工作原理
+
+整体链路是：
 
 1. RealSense 同时采集 RGB 和 depth，并把 depth 对齐到 color。
-2. 把 RGB 帧发给 OpenRouter 上的视觉模型，让它返回目标物体的 2D bounding box。
-3. 在 bbox 内取稳定深度值。
-4. 用 RealSense color camera 的内参把像素点和深度反投影成 3D 坐标。
+2. 在 RGB 图里检测目标，得到 bbox、mask 或关键点。
+3. 根据 `depth.position_anchor` 选择要定位的部位，例如整个 bbox、黑色头部 `head`、透明尾端 `tail`。
+4. 在对应像素附近取有效 depth，通常取中位数来抑制噪声。
+5. 用 RealSense color camera 内参反投影成 3D 坐标。
+6. 如果启用外参标定，再把相机坐标变换到机器人 base 坐标。
 
 输出坐标是相机光学坐标系下的米制坐标：`x` 向右，`y` 向下，`z` 从相机向前。
+
+当前 `config.yaml` 默认面向“桌面上散落的样本瓶/试管”：
+
+```yaml
+detector:
+  mode: "grounded_sam"
+
+grounded_sam:
+  text_prompt: "sample bottle"
+  selection: "leftmost"
+
+depth:
+  position_anchor: "tail"
+```
+
+这表示：先找所有样本瓶，选择图像最左侧的一个，用 SAM 得到瓶身 mask，再估计 `head_px` 和 `tail_px`，最后输出透明尾端 `tail` 附近的 3D 坐标。
+
+## 适用范围
+
+比较适合：
+
+- 桌面或工作台上静止/低速移动的目标定位。
+- 多个相似物体中选择最左、最右、最大、最上等实例。
+- 样本瓶、试管、小瓶等有稳定几何外形的目标。
+- 获取固定语义部位的位置，例如样本瓶黑色头部 `head` 或透明尾端 `tail`。
+- 机器人抓取前的粗定位或中等精度定位。
+- 已标定头部相机 `base_T_camera` 或腕部相机 `flange_T_camera` 后输出 base 坐标。
+
+不太适合：
+
+- 亚毫米级精密测量或装配级定位。
+- 快速运动目标。
+- 严重遮挡、堆叠、贴在一起的物体。
+- RGB 中目标和背景几乎不可区分的场景。
+- 任意开放语义部位的高鲁棒定位，例如“杯子把手最左端”这类未专门建模的细部。
+- 透明、强反光、黑亮材质的直接深度测量，尤其是 D435i 经常量不到透明表面。
+
+透明试管/样本瓶尾端是当前项目支持的一个专门场景：RGB 上会估计 `tail_px`，但 3D 位置仍依赖 `tail_px` 附近是否有有效 depth。如果输出 `median_sparse` 或报 depth samples 不足，需要查看 `runs/latest_depth.jpg` 判断 RealSense 是否真的量到了深度。
+
+## 使用方式概览
+
+常用模式选择：
+
+```yaml
+# 样本瓶/试管，推荐
+detector:
+  mode: "grounded_sam"
+
+# 红色方块等颜色明确目标
+detector:
+  mode: "color"
+
+# 复杂语义目标或临时自然语言部位
+detector:
+  mode: "vlm"
+```
+
+常用位置锚点：
+
+```yaml
+depth:
+  position_anchor: "bbox"  # 整个检测框中心
+  position_anchor: "head"  # 样本瓶黑色头部/瓶盖
+  position_anchor: "tail"  # 样本瓶透明尾端
+  position_anchor: "auto"  # 有 head 用 head，否则用 bbox
+```
+
+运行一次：
+
+```bash
+object-locator --config config.yaml --json
+```
+
+最终 JSON 会自动保存到 `output.result_json` 指定的位置，默认是 `runs/results/<run_id>.json`，不会覆盖。不要再用 `> runs/latest_result.json` 做重复实验；那个固定文件名一定会被 shell 覆盖。
+
+最终 JSON 中最重要的字段：
+
+- `position`: 相机坐标系下的位置，单位米。
+- `position_anchor`: 本次定位的是 `bbox`、`head`、`tail` 还是自动选择结果。
+- `detection.bbox`: RGB 图上的目标框，单位像素。
+- `detection.head_px` / `detection.tail_px`: 样本瓶方向关键点。
+- `position_base`: 启用标定后，机器人 base 坐标系下的位置。
+- `debug_outputs`: RGB/depth/panel 调试图路径。
+
+如果经常遇到：
+
+```text
+Frame didn't arrive within ...
+```
+
+这通常是 RealSense 没及时吐帧，不是 DINO/SAM 或 VLM 的问题。正常通过 `object-locator` 退出会调用 `pipeline.stop()`；但如果进程被强杀、USB/固件卡住，或者 `realsense-viewer`/其他程序占着设备，下一次启动可能仍然拿不到帧。最高公共 RGB/depth 档是 `1280x720@30`，如果它频繁超时，先退到 `848x480@30` 判断是不是 USB 带宽/稳定性问题。
+
+可以临时硬重置相机：
+
+```bash
+object-locator --config config.yaml --json --reset-realsense
+```
+
+也可以在配置里加大等待并启用重置：
+
+```yaml
+realsense:
+  width: 1280
+  height: 720
+  frame_timeout_ms: 20000
+  capture_retries: 5
+  warmup_frames: 30
+  reset_on_start: true
+  reset_wait_s: 5.0
+```
 
 ## 安装
 
@@ -39,12 +159,14 @@ pip install -e ".[dev,grounded-sam]"
 
 第一次运行会从 Hugging Face 下载模型权重，建议有 CUDA GPU；CPU 也能跑但会慢很多。
 
-然后编辑 `.env`：
+如果使用 `detector.mode: "vlm"` 或 `auto` 需要回退到 VLM，再编辑 `.env`：
 
 ```bash
 OPENROUTER_API_KEY=<your-openrouter-api-key>
 OPENROUTER_MODEL=google/gemini-2.5-flash-lite
 ```
+
+如果只使用 `detector.mode: "grounded_sam"` 或 `color`，不需要 OpenRouter API key。
 
 如果运行时报：
 
@@ -56,9 +178,9 @@ OpenRouter returned HTTP 401
 
 如果 `pyrealsense2` 安装或相机权限有问题，先确认 librealsense / udev rules 已配置，并且普通用户能访问 D435i。
 
-## 模型建议
+## VLM 模型建议
 
-默认用 `google/gemini-2.5-flash-lite`：这个项目只需要 VLM 做一次目标定位并返回 JSON，Flash-Lite 通常在速度和成本上更适合作为原型默认值。
+VLM 只在 `detector.mode: "vlm"`，或者 `auto` 需要调用 OpenRouter 时使用。默认用 `google/gemini-2.5-flash-lite`：这个项目只需要 VLM 做一次目标定位并返回 JSON，Flash-Lite 通常在速度和成本上更适合作为原型默认值。
 
 如果 bbox 不够稳，可以在 `config.yaml` 里切换：
 
@@ -114,10 +236,14 @@ openrouter:
 
 realsense:
   serial_number: null
-  width: 640
-  height: 480
+  width: 1280
+  height: 720
   fps: 30
   warmup_frames: 30
+  frame_timeout_ms: 20000
+  capture_retries: 5
+  reset_on_start: false
+  reset_wait_s: 5.0
 
 depth:
   strategy: "median"
@@ -137,7 +263,7 @@ calibration:
   file: "calibration/extrinsics.yaml"
 ```
 
-`detector.mode` 有三种：
+`detector.mode` 有四种：
 
 - `auto`: 默认。目标名里有 `red`、`blue`、`green`、`红色` 等颜色词时，用本地 HSV 颜色检测；否则调用 VLM。
 - `color`: 强制用本地颜色检测，适合 `red cube`、`blue block` 这类颜色明确的目标。
@@ -335,6 +461,8 @@ object-locator --list-devices
 ```yaml
 output:
   json: false
+  result_json: "runs/results/{run_id}.json"
+  history_dir: "runs/history"
   debug_image: "runs/latest_panel.jpg"
   debug_rgb_image: "runs/latest_rgb.jpg"
   debug_depth_image: "runs/latest_depth.jpg"
@@ -342,12 +470,42 @@ output:
   save_depth: null
 ```
 
-每次运行后会保存三张检查图：
+每次运行后会保存三张最新检查图，同时在 `runs/history/<run_id>/` 下保留一份不会覆盖的归档：
 
+- `result_json`: 最终 JSON 结果路径。支持 `{run_id}` 模板，默认每次生成新文件。
 - `debug_rgb_image`: RGB 图，画 detector 返回的 bbox。
 - `debug_depth_image`: 对齐后的深度伪彩色图，画同一个 bbox。
 - `debug_image`: 左右拼接图，左边 RGB，右边 depth。
 - `vlm_response`: OpenRouter 原始文本响应，用来排查 JSON 解析失败。
+- `history_dir`: 每次运行的历史目录，包含 `result.json`、`rgb.jpg`、`depth.jpg`、`panel.jpg` 和 `detector_trace.json`。
+
+做 z 轴重复性实验时，可以移动桌面上的目标后反复运行：
+
+```bash
+object-locator --config config.yaml --json
+```
+
+每次输出都会有不同的 `run_id`，归档路径类似：
+
+```text
+runs/results/20260626_153012_123456.json
+runs/history/20260626_153012_123456/result.json
+runs/history/20260626_153012_123456/panel.jpg
+```
+
+`runs/latest_*.jpg` 仍然会被覆盖，方便快速查看最新结果；`runs/results/<run_id>.json` 和 `runs/history/<run_id>/` 不会覆盖。要比较 z 是否稳定，重点看每次对应的 `result.json` 里的：
+
+```json
+{
+  "run_id": "...",
+  "position": {
+    "z_m": 0.682,
+    "sample_count": 87,
+    "valid_fraction": 0.24,
+    "strategy": "median"
+  }
+}
+```
 
 绿色框是 detector bbox，橙色半透明区域是 SAM mask，黄色细框是实际用于取深度的内部区域，白色十字是最终用于反投影的像素点。紫色箭头表示 `tail_px -> head_px` 指向，黄色点是 head，紫色点是 tail。
 
@@ -427,12 +585,32 @@ object-locator --target "red cup" --require-parameters
 
 ```json
 {
-  "target": "red cup",
+  "target": "leftmost sample bottle",
   "found": true,
+  "detection": {
+    "source": "grounded_sam",
+    "label": "sample bottle",
+    "bbox": {
+      "x_min": 120.5,
+      "y_min": 300.2,
+      "x_max": 210.8,
+      "y_max": 390.1
+    },
+    "head_px": {"x": 180.2, "y": 320.5},
+    "tail_px": {"x": 130.1, "y": 370.2}
+  },
+  "position_anchor": "tail",
   "position": {
-    "x_m": 0.112,
-    "y_m": -0.036,
-    "z_m": 0.842
+    "x_m": -0.123,
+    "y_m": 0.045,
+    "z_m": 0.682,
+    "strategy": "median",
+    "sample_count": 87
+  },
+  "position_base": {
+    "available": false,
+    "enabled": false,
+    "reason": "calibration.enabled is false"
   },
   "coordinate_frame": {
     "x": "right",
@@ -444,12 +622,15 @@ object-locator --target "red cup" --require-parameters
 
 ## 精度和局限
 
-这套方案适合快速原型，但不是严格实时/高精度方案：
+这套方案适合机器人操作前的快速感知和中等精度定位，但不是严格实时/高精度测量系统。主要误差来源包括：
 
-- VLM bbox 会有抖动，且 API 延迟通常比本地检测模型高。
-- 透明、反光、黑色吸光材质会让 D435i 深度不稳定。
-- bbox 不是 segmentation mask，框里可能混入背景；可尝试 `--inner-ratio` 或 `--depth-strategy foreground`。
-- 如果后续要做机器人抓取，建议把 VLM 只用于“找目标”，再接 GroundingDINO/SAM/本地检测模型或实例分割来提高稳定性。
+- RGB 检测误差：Grounding DINO/SAM 或 VLM 可能把 bbox、mask、keypoint 放偏，复杂遮挡时更明显。
+- 深度误差：D435i 对透明、反光、黑色吸光材质不稳定，透明瓶身尾端尤其容易没有有效 depth。
+- 采样误差：`position_anchor` 附近如果只有少量有效点，输出会变成 `median_sparse`，需要手动看调试图确认。
+- 外参误差：启用 `position_base` 后，还会叠加 `base_T_camera`、`flange_T_camera`、`base_T_flange` 的标定误差。
+- 时间同步误差：腕部相机必须使用拍照时刻的 `base_T_flange`，机器人运动时不同步会导致 base 坐标偏移。
+
+经验上，不透明且有纹理的目标会比透明/反光目标稳定很多。样本瓶尾端这种透明部位，RGB 关键点通常可见，但 3D 坐标是否可靠取决于 RealSense 是否在该区域量到深度；必要时应引入桌面平面约束、已知试管几何或机器人二次观测来补偿。
 
 ## 测试
 

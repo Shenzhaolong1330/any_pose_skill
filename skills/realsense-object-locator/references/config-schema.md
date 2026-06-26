@@ -77,11 +77,19 @@ realsense:
   height: 720
   fps: 30
   warmup_frames: 30
+  frame_timeout_ms: 20000
+  capture_retries: 5
+  reset_on_start: false
+  reset_wait_s: 5.0
 ```
 
 - `serial_number`: Set to a camera serial string or number when multiple RealSense devices are connected. Use `object-locator --list-devices` to inspect devices.
-- `width`, `height`, `fps`: Must be supported by the device stream profile.
+- `width`, `height`, `fps`: Must be supported by the device stream profile. `1280x720@30` is the highest common D435i color/depth profile used by this project; `848x480@30` is a more stable fallback.
 - `warmup_frames`: Keep nonzero so auto exposure and depth stabilize.
+- `frame_timeout_ms`: How long to wait for each RealSense frame before retrying. Increase if startup is slow.
+- `capture_retries`: Number of frame wait attempts before failing.
+- `reset_on_start`: Hardware-reset the RealSense before opening streams. Enable only when the camera was left in a bad USB/firmware state or use `--reset-realsense` for one run.
+- `reset_wait_s`: Seconds to wait after hardware reset before creating the pipeline.
 
 ## Depth
 
@@ -114,6 +122,8 @@ depth:
 ```yaml
 output:
   json: true
+  result_json: "runs/results/{run_id}.json"
+  history_dir: "runs/history"
   debug_image: "runs/latest_panel.jpg"
   debug_rgb_image: "runs/latest_rgb.jpg"
   debug_depth_image: "runs/latest_depth.jpg"
@@ -121,7 +131,9 @@ output:
   save_depth: null
 ```
 
-`output.json: true` prints JSON to stdout. Save it with shell redirection if a file is needed.
+`output.json: true` prints JSON to stdout.
+`result_json` writes the final JSON result to a file. Use `{run_id}` in the path to prevent overwriting repeated measurements.
+`history_dir` also writes each run to `runs/history/<run_id>/` with `result.json` and debug images, so repeated measurements do not overwrite earlier runs. Set it to `null` or an empty string to disable history archives.
 
 ## Calibration
 
